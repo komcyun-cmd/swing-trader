@@ -4,3 +4,5 @@ finance-datareader
 plotly
 lxml
 beautifulsoup4
+requests
+google-generativeai
