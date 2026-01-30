@@ -1,0 +1,6 @@
+streamlit
+pandas
+finance-datareader
+plotly
+lxml
+beautifulsoup4
