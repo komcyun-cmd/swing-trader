@@ -12,10 +12,10 @@ import json
 # -----------------------------------------------------------
 # [1] 기본 설정
 # -----------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Easy Swing Trader v13.0 (Real Top 200)")
+st.set_page_config(layout="wide", page_title="Easy Swing Trader v13.1 (Fix)")
 
 # -----------------------------------------------------------
-# [2] 데이터 수집 엔진 (시가총액 상위 200개 하드코딩)
+# [2] 데이터 수집 엔진 (TOP 200 하드코딩)
 # -----------------------------------------------------------
 @st.cache_data
 def get_stock_list():
@@ -151,13 +151,11 @@ def fetch_stock_data(code, name):
         current_price = int(today['Close'])
         result = None
         
-        # [전략 A] 눌림목
         if (today['MA20'] > today['MA60']) and (abs(today['Close'] - today['MA20']) / today['MA20'] <= 0.03) and (today['Volume'] < today['Vol_MA5']):
             ma20_price = int(today['MA20'])
             stop_price = int(current_price * 0.97) if current_price < ma20_price else ma20_price
             result = {"type": "Sniper", "종목명": name, "코드": code, "현재가": f"{current_price:,}원", "🔵손절가": f"{stop_price:,}원", "🔴목표가": f"{int(current_price * 1.05):,}원", "전략": "눌림목"}
 
-        # [전략 B] 돌파
         elif (today['Volume'] > today['Vol_MA5'] * 1.5) and (today['Change'] > 0.02) and (today['Close'] > today['MA60']):
             result = {"type": "Breaker", "종목명": name, "코드": code, "현재가": f"{current_price:,}원", "🔵손절가": f"{int(current_price * 0.97):,}원", "🔴목표가": f"{int(current_price * 1.05):,}원", "전략": "돌파"}
             
@@ -182,15 +180,12 @@ def analyze_market_parallel(stock_list):
                 elif res['type'] == 'Breaker': breaker_results.append(res)
             completed += 1
             progress_bar.progress(completed / total)
-            status_text.text(f"🚀 전체 시장({total}종목) 정밀 타격 중... ({completed}/{total})")
+            status_text.text(f"🚀 시장 정밀 분석 중... ({completed}/{total})")
             
     progress_bar.empty()
     status_text.empty()
     return pd.DataFrame(sniper_results), pd.DataFrame(breaker_results)
 
-# -----------------------------------------------------------
-# [3] 백테스팅 엔진 (부활)
-# -----------------------------------------------------------
 def run_backtest(code, name, strategy_type):
     df = fdr.DataReader(code, datetime.datetime.now() - datetime.timedelta(days=365))
     df['MA5'] = df['Close'].rolling(window=5).mean()
@@ -249,15 +244,38 @@ def draw_chart_with_backtest(df, trades, name):
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------
-# [4] Gemini AI 뉴스 분석 엔진
+# [4] Gemini AI 뉴스 분석 엔진 (Fix: 에러 처리 강화)
 # -----------------------------------------------------------
 def analyze_news_with_gemini(api_key, url, stock_list_df):
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers)
+        # User-Agent 강화 (크롤링 차단 방지)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=10) # 10초 타임아웃
+        
+        if response.status_code != 200:
+            return f"에러: 뉴스 사이트 접속 실패 (상태코드 {response.status_code})", [], []
+
         soup = BeautifulSoup(response.text, 'html.parser')
-        title = soup.find('title').get_text()
-        content = " ".join([p.get_text() for p in soup.find_all('p')])[:3000]
+        
+        # 타이틀 추출 시도
+        title_tag = soup.find('title')
+        if not title_tag:
+            return "에러: 뉴스 제목을 찾을 수 없습니다.", [], []
+        title = title_tag.get_text()
+
+        # 본문 추출 시도 (p 태그 없으면 div 등 시도)
+        paragraphs = soup.find_all('p')
+        if not paragraphs:
+             # p 태그가 없으면 주요 컨텐츠 영역 시도 (네이버 뉴스 등)
+             content_area = soup.find('div', {'id': 'dic_area'}) or soup.find('div', {'class': 'news_view'})
+             if content_area:
+                 content = content_area.get_text()
+             else:
+                 content = soup.get_text() # 최후의 수단: 전체 텍스트
+        else:
+            content = " ".join([p.get_text() for p in paragraphs])
+            
+        content = content[:3000] # 길이 제한
 
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
@@ -274,17 +292,25 @@ def analyze_news_with_gemini(api_key, url, stock_list_df):
         {{ "good": [{{"stock": "종목명", "reason": "이유"}}], "bad": [{{"stock": "종목명", "reason": "이유"}}] }}
         """
         response = model.generate_content(prompt)
-        result_text = response.text.replace("```json", "").replace("```", "").strip()
-        result_json = json.loads(result_text)
-        return title, result_json['good'], result_json['bad']
-    except: return None, [], []
+        
+        # JSON 파싱 시도
+        try:
+            result_text = response.text.replace("```json", "").replace("```", "").strip()
+            result_json = json.loads(result_text)
+            return title, result_json.get('good', []), result_json.get('bad', [])
+        except json.JSONDecodeError:
+            return "에러: AI 응답을 해석할 수 없습니다. (JSON 오류)", [], []
+
+    except requests.exceptions.RequestException as e:
+        return f"에러: 뉴스 링크 접속 불가 ({str(e)})", [], []
+    except Exception as e:
+        return f"알 수 없는 에러: {str(e)}", [], []
 
 # -----------------------------------------------------------
-# [5] 메인 UI (모든 기능 통합)
+# [5] 메인 UI
 # -----------------------------------------------------------
-st.title("💸 Easy Swing Trader v13.0 (Top 200 Ultimate)")
+st.title("💸 Easy Swing Trader v13.1 (Fix)")
 
-# API 키 설정
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
     st.sidebar.success("🔑 API 키 로드 완료")
@@ -293,7 +319,6 @@ except:
 
 main_tab, news_tab = st.tabs(["📊 차트/백테스트", "📰 뉴스 AI 분석"])
 
-# --- Tab 1: 차트 & 백테스트 ---
 with main_tab:
     if st.button("🔄 Top 200 스캔 시작"):
         stocks = get_stock_list()
@@ -321,7 +346,7 @@ with main_tab:
                     c2.metric("승률", f"{win:.1f}%")
                     c3.metric("매매횟수", f"{cnt}회")
                     draw_chart_with_backtest(hist_df, trades, row['종목명'])
-            else: st.info("종목 없음")
+            else: st.info("조건 만족 종목 없음")
 
         with t2:
             st.subheader(f"발굴된 종목: {len(st.session_state.breaker_df)}개")
@@ -338,19 +363,22 @@ with main_tab:
                     c2.metric("승률", f"{win:.1f}%")
                     c3.metric("매매횟수", f"{cnt}회")
                     draw_chart_with_backtest(hist_df, trades, row['종목명'])
-            else: st.info("종목 없음")
+            else: st.info("조건 만족 종목 없음")
 
-# --- Tab 2: 뉴스 AI ---
 with news_tab:
     st.header("🧠 Gemini AI 투자 비서")
-    st.caption("Top 200 리스트 내에서 뉴스의 영향을 받는 종목을 찾아냅니다.")
     url = st.text_input("뉴스 링크 입력:")
     if st.button("🚀 AI 분석 시작"):
         if api_key and url:
-            with st.spinner("분석 중..."):
+            with st.spinner("Gemini가 뉴스를 읽고 분석 중입니다..."):
                 stocks = get_stock_list()
                 title, good, bad = analyze_news_with_gemini(api_key, url, stocks)
-                if title:
+                
+                # 에러 메시지가 반환된 경우 (문자열이 '에러'로 시작하거나 제목이 없을 때)
+                if title.startswith("에러") or title.startswith("알 수 없는"):
+                     st.error(f"⚠️ {title}")
+                     st.info("팁: 네이버 뉴스나 다음 뉴스 링크를 사용해보세요. 일부 유료/구독 사이트는 막힐 수 있습니다.")
+                else:
                     st.success(f"**{title}**")
                     c1, c2 = st.columns(2)
                     with c1:
