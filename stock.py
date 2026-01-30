@@ -12,14 +12,14 @@ import json
 # -----------------------------------------------------------
 # [1] 기본 설정
 # -----------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Easy Swing Trader v13.1 (Fix)")
+st.set_page_config(layout="wide", page_title="Easy Swing Trader v13.4 (Gemini Fix)")
 
 # -----------------------------------------------------------
 # [2] 데이터 수집 엔진 (TOP 200 하드코딩)
 # -----------------------------------------------------------
 @st.cache_data
 def get_stock_list():
-    # KOSPI + KOSDAQ 시가총액 상위 200개 종목 (업데이트: 2024-05 기준)
+    # KOSPI + KOSDAQ 시가총액 상위 200개 종목
     data = [
         # === 반도체 / IT / 하드웨어 ===
         {'Code': '005930', 'Name': '삼성전자'}, {'Code': '000660', 'Name': 'SK하이닉스'},
@@ -151,11 +151,13 @@ def fetch_stock_data(code, name):
         current_price = int(today['Close'])
         result = None
         
+        # [전략 A] 눌림목
         if (today['MA20'] > today['MA60']) and (abs(today['Close'] - today['MA20']) / today['MA20'] <= 0.03) and (today['Volume'] < today['Vol_MA5']):
             ma20_price = int(today['MA20'])
             stop_price = int(current_price * 0.97) if current_price < ma20_price else ma20_price
             result = {"type": "Sniper", "종목명": name, "코드": code, "현재가": f"{current_price:,}원", "🔵손절가": f"{stop_price:,}원", "🔴목표가": f"{int(current_price * 1.05):,}원", "전략": "눌림목"}
 
+        # [전략 B] 돌파
         elif (today['Volume'] > today['Vol_MA5'] * 1.5) and (today['Change'] > 0.02) and (today['Close'] > today['MA60']):
             result = {"type": "Breaker", "종목명": name, "코드": code, "현재가": f"{current_price:,}원", "🔵손절가": f"{int(current_price * 0.97):,}원", "🔴목표가": f"{int(current_price * 1.05):,}원", "전략": "돌파"}
             
@@ -180,7 +182,7 @@ def analyze_market_parallel(stock_list):
                 elif res['type'] == 'Breaker': breaker_results.append(res)
             completed += 1
             progress_bar.progress(completed / total)
-            status_text.text(f"🚀 시장 정밀 분석 중... ({completed}/{total})")
+            status_text.text(f"🚀 전체 시장({total}종목) 정밀 타격 중... ({completed}/{total})")
             
     progress_bar.empty()
     status_text.empty()
@@ -244,41 +246,39 @@ def draw_chart_with_backtest(df, trades, name):
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------
-# [4] Gemini AI 뉴스 분석 엔진 (Fix: 에러 처리 강화)
+# [4] Gemini AI 뉴스 분석 엔진 (v13.4 Model Fix)
 # -----------------------------------------------------------
 def analyze_news_with_gemini(api_key, url, stock_list_df):
     try:
-        # User-Agent 강화 (크롤링 차단 방지)
+        # User-Agent 강화
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=10) # 10초 타임아웃
+        response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code != 200:
             return f"에러: 뉴스 사이트 접속 실패 (상태코드 {response.status_code})", [], []
 
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 타이틀 추출 시도
         title_tag = soup.find('title')
         if not title_tag:
             return "에러: 뉴스 제목을 찾을 수 없습니다.", [], []
         title = title_tag.get_text()
 
-        # 본문 추출 시도 (p 태그 없으면 div 등 시도)
         paragraphs = soup.find_all('p')
         if not paragraphs:
-             # p 태그가 없으면 주요 컨텐츠 영역 시도 (네이버 뉴스 등)
              content_area = soup.find('div', {'id': 'dic_area'}) or soup.find('div', {'class': 'news_view'})
              if content_area:
                  content = content_area.get_text()
              else:
-                 content = soup.get_text() # 최후의 수단: 전체 텍스트
+                 content = soup.get_text()
         else:
             content = " ".join([p.get_text() for p in paragraphs])
             
-        content = content[:3000] # 길이 제한
+        content = content[:3000]
 
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # [중요] 선생님이 지정한 'gemini-flash-latest' 사용
+        model = genai.GenerativeModel('gemini-flash-latest')
 
         stock_names = ", ".join(stock_list_df['Name'].tolist())
         prompt = f"""
@@ -293,7 +293,6 @@ def analyze_news_with_gemini(api_key, url, stock_list_df):
         """
         response = model.generate_content(prompt)
         
-        # JSON 파싱 시도
         try:
             result_text = response.text.replace("```json", "").replace("```", "").strip()
             result_json = json.loads(result_text)
@@ -309,7 +308,7 @@ def analyze_news_with_gemini(api_key, url, stock_list_df):
 # -----------------------------------------------------------
 # [5] 메인 UI
 # -----------------------------------------------------------
-st.title("💸 Easy Swing Trader v13.1 (Fix)")
+st.title("💸 Easy Swing Trader v13.4 (Gemini Fix)")
 
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
@@ -374,10 +373,8 @@ with news_tab:
                 stocks = get_stock_list()
                 title, good, bad = analyze_news_with_gemini(api_key, url, stocks)
                 
-                # 에러 메시지가 반환된 경우 (문자열이 '에러'로 시작하거나 제목이 없을 때)
                 if title.startswith("에러") or title.startswith("알 수 없는"):
                      st.error(f"⚠️ {title}")
-                     st.info("팁: 네이버 뉴스나 다음 뉴스 링크를 사용해보세요. 일부 유료/구독 사이트는 막힐 수 있습니다.")
                 else:
                     st.success(f"**{title}**")
                     c1, c2 = st.columns(2)
