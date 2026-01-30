@@ -8,16 +8,15 @@ import plotly.graph_objects as go
 # -----------------------------------------------------------
 # [1] 기본 설정
 # -----------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Dual-Core Swing Trader v2.1")
+st.set_page_config(layout="wide", page_title="Easy Swing Trader v4.0")
 
 # -----------------------------------------------------------
-# [2] 데이터 수집 엔진 (코스닥/변동성 종목 대거 추가)
+# [2] 데이터 수집 엔진 (코스닥/변동성 종목 포함 60개)
 # -----------------------------------------------------------
 @st.cache_data
 def get_stock_list():
-    # KRX 차단 방지를 위한 하드코딩 리스트 (KOSPI 우량주 + KOSDAQ 주도주 혼합 60개)
+    # KRX 차단 방지용 주요 종목 리스트
     data = [
-        # [KOSPI] 반도체/자동차/플랫폼/금융
         {'Code': '005930', 'Name': '삼성전자'}, {'Code': '000660', 'Name': 'SK하이닉스'},
         {'Code': '005380', 'Name': '현대차'}, {'Code': '000270', 'Name': '기아'},
         {'Code': '035420', 'Name': 'NAVER'}, {'Code': '035720', 'Name': '카카오'},
@@ -25,10 +24,6 @@ def get_stock_list():
         {'Code': '373220', 'Name': 'LG에너지솔루션'}, {'Code': '207940', 'Name': '삼성바이오로직스'},
         {'Code': '068270', 'Name': '셀트리온'}, {'Code': '105560', 'Name': 'KB금융'},
         {'Code': '086790', 'Name': '하나금융지주'}, {'Code': '042700', 'Name': '한미반도체'},
-        {'Code': '010130', 'Name': '고려아연'}, {'Code': '034020', 'Name': '두산에너빌리티'},
-        {'Code': '000100', 'Name': '유한양행'}, {'Code': '011200', 'Name': 'HMM'},
-        
-        # [KOSDAQ] 2차전지/바이오/로봇/AI (변동성 큰 종목들)
         {'Code': '247540', 'Name': '에코프로비엠'}, {'Code': '086520', 'Name': '에코프로'},
         {'Code': '028300', 'Name': 'HLB'}, {'Code': '196170', 'Name': '알테오젠'},
         {'Code': '066970', 'Name': '엘앤에프'}, {'Code': '277810', 'Name': '레인보우로보틱스'},
@@ -36,21 +31,14 @@ def get_stock_list():
         {'Code': '293490', 'Name': '카카오게임즈'}, {'Code': '263750', 'Name': '펄어비스'},
         {'Code': '328130', 'Name': '루닛'}, {'Code': '462510', 'Name': '두산로보틱스'},
         {'Code': '041510', 'Name': '에스엠'}, {'Code': '237690', 'Name': '에스티팜'},
-        {'Code': '091990', 'Name': '셀트리온제약'}, {'Code': '214150', 'Name': '클래시스'},
-        {'Code': '051900', 'Name': 'LG생활건강'}, {'Code': '090430', 'Name': '아모레퍼시픽'},
-        {'Code': '009540', 'Name': 'HD한국조선해양'}, {'Code': '010950', 'Name': 'S-Oil'},
         {'Code': '015760', 'Name': '한국전력'}, {'Code': '032640', 'Name': 'LG유플러스'},
-        {'Code': '003550', 'Name': 'LG'}, {'Code': '029780', 'Name': '삼성카드'},
-        {'Code': '071050', 'Name': '한국금융지주'}, {'Code': '030200', 'Name': 'KT'},
-        {'Code': '017670', 'Name': 'SK텔레콤'}, {'Code': '033780', 'Name': 'KT&G'},
-        {'Code': '096770', 'Name': 'SK이노베이션'}, {'Code': '009830', 'Name': '한화솔루션'},
-        {'Code': '112610', 'Name': '씨에스윈드'}, {'Code': '000810', 'Name': '삼성화재'}
+        {'Code': '003550', 'Name': 'LG'}, {'Code': '017670', 'Name': 'SK텔레콤'},
+        {'Code': '009830', 'Name': '한화솔루션'}, {'Code': '112610', 'Name': '씨에스윈드'}
     ]
     return pd.DataFrame(data)
 
 def fetch_stock_data(code, name):
     try:
-        # 최근 120일 데이터 (병렬 처리 최적화)
         df = fdr.DataReader(code, datetime.datetime.now().year - 1)
         if len(df) < 60: return None
         
@@ -62,32 +50,47 @@ def fetch_stock_data(code, name):
         df['Change'] = df['Close'].pct_change()
         
         today = df.iloc[-1]
+        current_price = int(today['Close'])
         
         result = None
         
-        # [전략 A] 눌림목 스나이퍼 (조건 완화: 3% 이내 접근)
+        # ---------------------------------------------------------
+        # 🛡️ [전략 A] 눌림목 스나이퍼 (가격 가이드 계산)
+        # ---------------------------------------------------------
         if (today['MA20'] > today['MA60']) and \
            (abs(today['Close'] - today['MA20']) / today['MA20'] <= 0.03) and \
            (today['Volume'] < today['Vol_MA5']):
+            
+            # 눌림목은 20일선이 깨지면 손절, 전고점(+5~7%) 가면 익절
+            stop_price = int(today['MA20']) # 손절가: 20일선
+            target_price = int(current_price * 1.05) # 목표가: +5%
+            
             result = {
                 "type": "Sniper", "종목명": name, "코드": code,
-                "현재가": int(today['Close']), "20일선": int(today['MA20']),
-                "전략": "눌림목 매수"
+                "현재가": f"{current_price:,}원", 
+                "🔵손절가": f"{stop_price:,}원", # 색깔로 구분
+                "🔴목표가": f"{target_price:,}원 (+5%)",
+                "전략": "안전하게 줍기"
             }
 
-        # [전략 B] 돌파매매 브레이커 (조건 현실화)
-        # 1. 거래량이 5일 평균보다 50% 더 터짐 (1.5배)
-        # 2. 주가가 2% 이상 상승 & 양봉
-        # 3. 60일선(수급선) 위에 위치
+        # ---------------------------------------------------------
+        # 🚀 [전략 B] 돌파매매 브레이커 (가격 가이드 계산)
+        # ---------------------------------------------------------
         elif (today['Volume'] > today['Vol_MA5'] * 1.5) and \
              (today['Change'] > 0.02) and \
              (today['Close'] > today['Open']) and \
              (today['Close'] > today['MA60']):
+            
+            # 돌파는 -3% 칼손절, +5% 짧은 익절
+            stop_price = int(current_price * 0.97) # 손절가: -3%
+            target_price = int(current_price * 1.05) # 목표가: +5%
+
             result = {
                 "type": "Breaker", "종목명": name, "코드": code,
-                "현재가": int(today['Close']), 
-                "등락률": round(today['Change']*100, 2),
-                "전략": "추세 돌파"
+                "현재가": f"{current_price:,}원", 
+                "🔵손절가": f"{stop_price:,}원 (-3%)",
+                "🔴목표가": f"{target_price:,}원 (+5%)",
+                "전략": "빠르게 먹기"
             }
             
         return result
@@ -101,7 +104,6 @@ def analyze_market_parallel(stock_list):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # 10개씩 동시에 가져오기 (속도 10배)
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(fetch_stock_data, row['Code'], row['Name']): row for i, row in stock_list.iterrows()}
         
@@ -118,7 +120,7 @@ def analyze_market_parallel(stock_list):
             
             completed += 1
             progress_bar.progress(completed / total)
-            status_text.text(f"🚀 AI 고속 스캔 중... ({completed}/{total})")
+            status_text.text(f"🚀 AI가 가격표 계산 중... ({completed}/{total})")
             
     progress_bar.empty()
     status_text.empty()
@@ -137,26 +139,49 @@ def draw_chart(code, name):
                 name='Candles')
     
     ma20 = go.Scatter(x=df.index, y=df['Close'].rolling(window=20).mean(), 
-                      line=dict(color='orange', width=2), name='MA20')
-    ma60 = go.Scatter(x=df.index, y=df['Close'].rolling(window=60).mean(), 
-                      line=dict(color='green', width=1), name='MA60')
-
-    fig = go.Figure(data=[candlestick, ma20, ma60])
-    fig.update_layout(title=f"{name} ({code}) 차트 분석", xaxis_rangeslider_visible=False, height=500)
+                      line=dict(color='orange', width=2), name='20일선(생명선)')
+    
+    fig = go.Figure(data=[candlestick, ma20])
+    fig.update_layout(title=f"{name} 차트", xaxis_rangeslider_visible=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------
-# [4] 메인 UI
+# [4] 메인 UI (설명서 추가됨)
 # -----------------------------------------------------------
-st.title("⚖️ Dual-Core Swing Trader v2.1")
-st.caption("Updated: KOSPI/KOSDAQ 주요 60개 종목 스캔")
+st.title("💸 주린이 맞춤 가격표 생성기 v4.0")
+
+# --- [여기] 설명서가 추가되었습니다 ---
+with st.expander("📘 초보자를 위한 1분 사용설명서 (눌러서 보세요)"):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info("### 🛡️ 1. 눌림목 (Sniper)")
+        st.markdown("""
+        **"명품 세일 기간에 줍자"**
+        - **상황:** 잘 오르던 주식이 잠깐 힘들어서 쉴 때.
+        - **전략:** 쌀 때 사서 비싸게 팔기.
+        - **🔵 손절가:** 가격이 이 선 밑으로 떨어지면 **"세일이 아니라 폐업"**이니까 도망가세요.
+        - **🔴 목표가:** 욕심부리지 말고 여기서 챙기세요.
+        """)
+        
+    with col2:
+        st.error("### 🚀 2. 돌파매매 (Breaker)")
+        st.markdown("""
+        **"출발하는 고속버스에 타자"**
+        - **상황:** 주식이 갑자기 거래량이 터지며 급등할 때.
+        - **전략:** 비싸게 사서 더 비싸게 팔기.
+        - **🔵 손절가:** 버스가 후진하면 큰일 납니다. **-3%** 되면 뒤도 보지 말고 내리세요.
+        - **🔴 목표가:** 짧고 굵게 먹고 내리세요.
+        """)
+
+st.divider()
 
 if 'scanned' not in st.session_state:
     st.session_state.scanned = False
     st.session_state.sniper_df = pd.DataFrame()
     st.session_state.breaker_df = pd.DataFrame()
 
-if st.button("🔄 시장 스캔 시작"):
+if st.button("🔄 종목 & 가격표 뽑기"):
     stocks = get_stock_list()
     df_s, df_b = analyze_market_parallel(stocks)
     st.session_state.sniper_df = df_s
@@ -164,44 +189,47 @@ if st.button("🔄 시장 스캔 시작"):
     st.session_state.scanned = True
 
 if st.session_state.scanned:
-    tab1, tab2 = st.tabs(["🛡️ 눌림목 스나이퍼", "🚀 돌파 브레이커"])
+    tab1, tab2 = st.tabs(["🛡️ 안전하게 (눌림목)", "🚀 빠르게 (돌파)"])
     
     # [Tab 1] 눌림목
     with tab1:
         st.subheader(f"발굴된 종목: {len(st.session_state.sniper_df)}개")
         if not st.session_state.sniper_df.empty:
-            event1 = st.dataframe(
+            st.dataframe(
                 st.session_state.sniper_df, 
                 selection_mode="single-row", 
                 on_select="rerun",
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
+                key="sniper_table"
             )
-            if len(event1.selection.rows) > 0:
-                idx = event1.selection.rows[0]
+            # 세션 스테이트를 활용한 선택 감지 (안정성 강화)
+            if len(st.session_state.sniper_table.selection.rows) > 0:
+                idx = st.session_state.sniper_table.selection.rows[0]
                 code = st.session_state.sniper_df.iloc[idx]['코드']
                 name = st.session_state.sniper_df.iloc[idx]['종목명']
                 st.divider()
                 draw_chart(code, name)
         else:
-            st.info("조건에 맞는 눌림목 종목이 없습니다.")
+            st.write("지금 싸게 살만한 종목이 없네요.")
 
     # [Tab 2] 돌파매매
     with tab2:
         st.subheader(f"발굴된 종목: {len(st.session_state.breaker_df)}개")
         if not st.session_state.breaker_df.empty:
-            event2 = st.dataframe(
+            st.dataframe(
                 st.session_state.breaker_df, 
                 selection_mode="single-row", 
                 on_select="rerun",
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
+                key="breaker_table"
             )
-            if len(event2.selection.rows) > 0:
-                idx = event2.selection.rows[0]
+            if len(st.session_state.breaker_table.selection.rows) > 0:
+                idx = st.session_state.breaker_table.selection.rows[0]
                 code = st.session_state.breaker_df.iloc[idx]['코드']
                 name = st.session_state.breaker_df.iloc[idx]['종목명']
                 st.divider()
                 draw_chart(code, name)
         else:
-            st.info("오늘 돌파 조건을 만족하는 종목이 없습니다. (장이 조용할 수 있습니다)")
+            st.write("지금 급등하는 종목이 없네요.")
