@@ -12,7 +12,7 @@ import json
 # -----------------------------------------------------------
 # [1] 기본 설정
 # -----------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Easy Swing Trader v13.4 (Gemini Fix)")
+st.set_page_config(layout="wide", page_title="Easy Swing Trader v14.0 (Prob AI)")
 
 # -----------------------------------------------------------
 # [2] 데이터 수집 엔진 (TOP 200 하드코딩)
@@ -151,13 +151,11 @@ def fetch_stock_data(code, name):
         current_price = int(today['Close'])
         result = None
         
-        # [전략 A] 눌림목
         if (today['MA20'] > today['MA60']) and (abs(today['Close'] - today['MA20']) / today['MA20'] <= 0.03) and (today['Volume'] < today['Vol_MA5']):
             ma20_price = int(today['MA20'])
             stop_price = int(current_price * 0.97) if current_price < ma20_price else ma20_price
             result = {"type": "Sniper", "종목명": name, "코드": code, "현재가": f"{current_price:,}원", "🔵손절가": f"{stop_price:,}원", "🔴목표가": f"{int(current_price * 1.05):,}원", "전략": "눌림목"}
 
-        # [전략 B] 돌파
         elif (today['Volume'] > today['Vol_MA5'] * 1.5) and (today['Change'] > 0.02) and (today['Close'] > today['MA60']):
             result = {"type": "Breaker", "종목명": name, "코드": code, "현재가": f"{current_price:,}원", "🔵손절가": f"{int(current_price * 0.97):,}원", "🔴목표가": f"{int(current_price * 1.05):,}원", "전략": "돌파"}
             
@@ -246,11 +244,10 @@ def draw_chart_with_backtest(df, trades, name):
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------
-# [4] Gemini AI 뉴스 분석 엔진 (v13.4 Model Fix)
+# [4] Gemini AI 뉴스 분석 엔진 (v14.0 Prob)
 # -----------------------------------------------------------
 def analyze_news_with_gemini(api_key, url, stock_list_df):
     try:
-        # User-Agent 강화
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
         response = requests.get(url, headers=headers, timeout=10)
         
@@ -277,19 +274,31 @@ def analyze_news_with_gemini(api_key, url, stock_list_df):
         content = content[:3000]
 
         genai.configure(api_key=api_key)
-        # [중요] 선생님이 지정한 'gemini-flash-latest' 사용
+        # [수정] 사용자가 요청한 모델명
         model = genai.GenerativeModel('gemini-flash-latest')
 
         stock_names = ", ".join(stock_list_df['Name'].tolist())
         prompt = f"""
-        당신은 주식 트레이더입니다. 뉴스 기사를 읽고 '관심 종목 리스트'({stock_names}) 중
-        호재 Top 5, 악재 Top 5를 선정해 주세요.
+        당신은 20년 경력의 주식 트레이더입니다.
+        아래 뉴스 기사를 읽고, '관심 종목 리스트'({stock_names}) 중에서
+        뉴스에 의해 주가에 '긍정적(호재)' 또는 '부정적(악재)' 영향을 받을 종목을 찾아주세요.
+        
+        가장 중요한 것은 '확률(Probability)'입니다. 이 뉴스가 주가에 영향을 줄 확률을 0%~100% 사이의 숫자로 예측하세요.
         
         [뉴스] {title}
         {content}
 
-        JSON 형식으로만 답하세요:
-        {{ "good": [{{"stock": "종목명", "reason": "이유"}}], "bad": [{{"stock": "종목명", "reason": "이유"}}] }}
+        반드시 아래 JSON 형식으로만 답변하세요 (다른 말 금지):
+        {{
+            "good": [
+                {{"stock": "종목명", "reason": "호재 이유(짧게)", "probability": 85}}, 
+                {{"stock": "종목명", "reason": "호재 이유(짧게)", "probability": 60}}
+            ],
+            "bad": [
+                {{"stock": "종목명", "reason": "악재 이유(짧게)", "probability": 90}},
+                {{"stock": "종목명", "reason": "악재 이유(짧게)", "probability": 70}}
+            ]
+        }}
         """
         response = model.generate_content(prompt)
         
@@ -308,7 +317,27 @@ def analyze_news_with_gemini(api_key, url, stock_list_df):
 # -----------------------------------------------------------
 # [5] 메인 UI
 # -----------------------------------------------------------
-st.title("💸 Easy Swing Trader v13.4 (Gemini Fix)")
+st.title("💸 Easy Swing Trader v14.0 (Prob AI)")
+
+# [복구된 설명서]
+with st.expander("📘 초보자를 위한 전략 설명서 (클릭해서 보세요)"):
+    c1, c2 = st.columns(2)
+    with c1:
+        st.info("### 🛡️ 눌림목 (Sniper)")
+        st.markdown("""
+        **"명품 세일 기간에 줍자"**
+        - **원리:** 상승세인 주식이 잠시 하락(조정)할 때 싸게 사는 전략.
+        - **타점:** 20일 이동평균선 근처에서 지지받을 때.
+        - **장점:** 손절 라인이 명확하고 안전함.
+        """)
+    with c2:
+        st.error("### 🚀 돌파매매 (Breaker)")
+        st.markdown("""
+        **"달리는 말에 올라타자"**
+        - **원리:** 거래량이 터지면서 전고점을 뚫을 때 추격 매수.
+        - **타점:** 거래량 폭발 + 양봉 + 저항선 돌파.
+        - **장점:** 단기간에 큰 수익 가능 (단, 손절 필수).
+        """)
 
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
@@ -379,9 +408,20 @@ with news_tab:
                     st.success(f"**{title}**")
                     c1, c2 = st.columns(2)
                     with c1:
-                        st.subheader("📈 호재")
-                        for i in good: st.success(f"**{i['stock']}**: {i['reason']}")
+                        st.subheader("📈 호재 예상")
+                        for i in good:
+                            prob = i.get('probability', 0)
+                            st.markdown(f"**{i['stock']}** <span style='color:blue'>({prob}%)</span>", unsafe_allow_html=True)
+                            st.progress(prob / 100)
+                            st.caption(f"💡 {i['reason']}")
+                            st.write("---")
+                            
                     with c2:
-                        st.subheader("📉 악재")
-                        for i in bad: st.error(f"**{i['stock']}**: {i['reason']}")
+                        st.subheader("📉 악재 예상")
+                        for i in bad:
+                            prob = i.get('probability', 0)
+                            st.markdown(f"**{i['stock']}** <span style='color:red'>({prob}%)</span>", unsafe_allow_html=True)
+                            st.progress(prob / 100)
+                            st.caption(f"⚠️ {i['reason']}")
+                            st.write("---")
         else: st.error("API 키와 링크를 확인하세요.")
